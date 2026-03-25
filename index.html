@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xadrez JS com IA (Minimax)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #2c3e50;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        h1 { margin-bottom: 10px; }
+
+        #status {
+            margin-bottom: 20px;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .board {
+            display: grid;
+            grid-template-columns: repeat(8, 60px);
+            grid-template-rows: repeat(8, 60px);
+            border: 5px solid #4a3121;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+            user-select: none; /* Impede seleção de texto nas peças */
+        }
+
+        .square {
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        /* Cores do Tabuleiro */
+        .white-square { background-color: #f0d9b5; color: black; }
+        .black-square { background-color: #b58863; color: black; }
+
+        /* Peças Pretas precisam ser levemente diferentes para contraste */
+        .piece.b { color: #000; }
+        .piece.w { color: #fff; text-shadow: 0 0 2px #000; } /* Contorno nas brancas */
+
+        /* Destaques */
+        .square.selected { background-color: #7bda81 !important; } /* Verde para seleção */
+        .square.valid-move::after { /* Ponto para movimentos possíveis */
+            content: '';
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Xadrez vs IA</h1>
+    <div id="status">Sua vez (Brancas)</div>
+    <div id="board" class="board"></div>
+
+    <script>
+        /* ==========================================
+           1. CONFIGURAÇÃO E INTERFACE (DOM)
+           ========================================== */
+        const boardHtml = document.getElementById('board');
+        const statusHtml = document.getElementById('status');
+        
+        // Inicializa o motor de regras chess.js (Padrão: Brancas começam)
+        const game = new Chess(); 
+        
+        let selectedSquare = null;
+
+        // Mapeamento de peças Unicode (Simples e eficiente)
+        const pieceUnicode = {
+            'wk': '♚', 'wq': '♛', 'wr': '♜', 'wb': '♝', 'wn': '♞', 'wp': '♟',
+            'bk': '♚', 'bq': '♛', 'br': '♜', 'bb': '♝', 'bn': '♞', 'bp': '♟'
+        };
+
+        // Função principal de renderização do tabuleiro visual
+        function drawBoard() {
+            boardHtml.innerHTML = ''; // Limpa o tabuleiro anterior
+            const boardState = game.board(); // Pega a matriz 8x8 do chess.js
+
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const squareInfo = boardState[row][col];
+                    const squareCoord = `${String.fromCharCode(97 + col)}${8 - row}`; // ex: 'e4'
+                    
+                    const squareDiv = document.createElement('div');
+                    squareDiv.className = `square ${(row + col) % 2 === 0 ? 'white-square' : 'black-square'}`;
+                    squareDiv.dataset.square = squareCoord;
+                    squareDiv.onclick = () => handleSquareClick(squareCoord);
+
+                    // Se houver uma peça nesta casa, adiciona o Unicode
+                    if (squareInfo) {
+                        const pieceSpan = document.createElement('span');
+                        const pieceKey = `${squareInfo.color}${squareInfo.type}`;
+                        pieceSpan.className = `piece ${squareInfo.color}`;
+                        pieceSpan.textContent = pieceUnicode[pieceKey];
+                        squareDiv.appendChild(pieceSpan);
+                    }
+
+                    // Destaque de seleção
+                    if (selectedSquare === squareCoord) {
+                        squareDiv.classList.add('selected');
+                    }
+
+                    // Destaque de movimentos válidos
+                    if (selectedSquare) {
+                        const moves = game.moves({ square: selectedSquare, verbose: true });
+                        if (moves.some(move => move.to === squareCoord)) {
+                            squareDiv.classList.add('valid-move');
+                        }
+                    }
+
+                    boardHtml.appendChild(squareDiv);
+                }
+            }
+            updateStatus();
+        }
+
+        // Atualiza o texto de status (Vez de quem, Fim de jogo)
+        function updateStatus() {
+            let status = '';
+            const moveColor = game.turn() === 'w' ? 'Brancas' : 'Pretas (IA)';
+
+            if (game.in_checkmate()) {
+                status = `FIM DE JOGO: ${moveColor} sofreram Xeque-Mate.`;
+            } else if (game.in_draw()) {
+                status = 'FIM DE JOGO: Empate.';
+            } else {
+                status = `Vez das ${moveColor}`;
+                if (game.in_check()) { status += ' (em Xeque!)'; }
+            }
+            statusHtml.textContent = status;
+        }
+
+        // Lógica de clique do usuário (Brancas)
+        function handleSquareClick(square) {
+            if (game.game_over() || game.turn() === 'b') return; // Bloqueia se fim ou vez da IA
+
+            if (selectedSquare) {
+                // Tenta realizar o movimento
+                const move = game.move({
+                    from: selectedSquare,
+                    to: square,
+                    promotion: 'q' // Promoção automática para Rainha para simplificar
+                });
+
+                if (move) {
+                    selectedSquare = null;
+                    drawBoard();
+                    // Após a jogada do humano, agenda a jogada da IA
+                    statusHtml.textContent = 'IA pensando...';
+                    setTimeout(makeAiMove, 250); // Pequeno delay para parecer natural
+                } else {
+                    // Clique inválido ou troca de peça selecionada
+                    const piece = game.get(square);
+                    if(piece && piece.color === 'w') {
+                        selectedSquare = square;
+                        drawBoard();
+                    } else {
+                        selectedSquare = null;
+                        drawBoard();
+                    }
+                }
+            } else {
+                // Primeira seleção
+                const piece = game.get(square);
+                if (piece && piece.color === 'w') {
+                    selectedSquare = square;
+                    drawBoard();
+                }
+            }
+        }
+
+        /* ==========================================
+           2. A INTELIGÊNCIA ARTIFICIAL (MINIMAX)
+           ========================================== */
+
+        // Função que inicia a jogada da IA
+        function makeAiMove() {
+            if (game.game_over()) return;
+
+            // Define a profundidade: 2 ou 3 é rápido e joga o básico. 4+ fica lento no navegador.
+            const depth = 3; 
+            const bestMove = minimaxRoot(depth, game, true);
+            
+            game.move(bestMove);
+            drawBoard();
+        }
+
+        // Valores de avaliação das peças (Heurística básica)
+        const pieceValues = { 'p': 100, 'n': 320, 'b': 330, 'r': 500, 'q': 900, 'k': 20000 };
+
+        // Função de Avaliação do Tabuleiro: Retorna um número.
+        // Positivo = Bom para Pretas (IA), Negativo = Bom para Brancas (Humano).
+        function evaluateBoard(current_game) {
+            let totalEvaluation = 0;
+            const board = current_game.board();
+
+            for (let i = 0; i < 8; i++) {
+                for (let j = 0; j < 8; j++) {
+                    const piece = board[i][j];
+                    if (piece) {
+                        const value = pieceValues[piece.type];
+                        // Pretas somam, Brancas subtraem
+                        totalEvaluation += (piece.color === 'b' ? value : -value);
+                    }
+                }
+            }
+            return totalEvaluation;
+        }
+
+        // A Raiz do Minimax: Analisa a primeira camada de movimentos
+        function minimaxRoot(depth, current_game, isMaximisingPlayer) {
+            const newGameMoves = current_game.moves({ verbose: true });
+            let bestMove = null;
+            let bestValue = -Infinity; // IA quer maximizar este valor
+
+            for (let i = 0; i < newGameMoves.length; i++) {
+                const move = newGameMoves[i];
+                current_game.move(move);
+                
+                // Chama o minimax recursivo para os próximos níveis
+                const value = minimax(depth - 1, current_game, -Infinity, Infinity, !isMaximisingPlayer);
+                
+                current_game.undo(); // Desfaz a jogada de teste
+
+                if (value >= bestValue) {
+                    bestValue = value;
+                    bestMove = move;
+                }
+            }
+            return bestMove;
+        }
+
+        // Algoritmo Minimax com Poda Alfa-Beta (Alpha-Beta Pruning)
+        function minimax(depth, current_game, alpha, beta, isMaximisingPlayer) {
+            // Caso base: profundidade zero ou fim de jogo
+            if (depth === 0 || current_game.game_over()) {
+                return evaluateBoard(current_game);
+            }
+
+            const newGameMoves = current_game.moves({ verbose: true });
+
+            if (isMaximisingPlayer) {
+                // Turno das Pretas (IA) - Maximizar
+                let bestValue = -Infinity;
+                for (let i = 0; i < newGameMoves.length; i++) {
+                    current_game.move(newGameMoves[i]);
+                    bestValue = Math.max(bestValue, minimax(depth - 1, current_game, alpha, beta, false));
+                    current_game.undo();
+                    
+                    // Poda Alfa-Beta
+                    alpha = Math.max(alpha, bestValue);
+                    if (beta <= alpha) break; 
+                }
+                return bestValue;
+            } else {
+                // Turno das Brancas (Humano) - Minimizar
+                let bestValue = Infinity;
+                for (let i = 0; i < newGameMoves.length; i++) {
+                    current_game.move(newGameMoves[i]);
+                    bestValue = Math.min(bestValue, minimax(depth - 1, current_game, alpha, beta, true));
+                    current_game.undo();
+                    
+                    // Poda Alfa-Beta
+                    beta = Math.min(beta, bestValue);
+                    if (beta <= alpha) break;
+                }
+                return bestValue;
+            }
+        }
+
+        // Início
+        drawBoard();
+
+    </script>
+</body>
+</html>
